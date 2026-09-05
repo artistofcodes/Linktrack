@@ -7,37 +7,71 @@
   <style>
     body { font-family: system-ui, sans-serif; background:#0f1115; color:#e6e6e6;
            display:grid; place-items:center; height:100vh; margin:0; }
-    .box { text-align:center; }
+    .box { text-align:center; max-width:340px; padding:0 20px; }
     .spin { width:28px; height:28px; border:3px solid #333; border-top-color:#6ea8fe;
             border-radius:50%; margin:0 auto 14px; animation:s 0.8s linear infinite; }
     @keyframes s { to { transform:rotate(360deg); } }
     small { color:#8a8f98; }
+    button { margin-top:14px; background:#6ea8fe; color:#0b0e14; border:0;
+             padding:8px 16px; border-radius:8px; font-weight:600; cursor:pointer; }
   </style>
 </head>
 <body>
   <!--
     This landing page is the CLIENT-SIDE half of the tracker. It runs in the
-    visitor's browser, reads details the server can't see from headers alone,
-    POSTs them back, then forwards the visitor to the real destination.
+    visitor's browser, reads details the server can't see, POSTs them back, then
+    forwards the visitor to the real destination.
 
-    An honest/consent-first version would show a "you're being redirected via an
-    analytics link" notice here instead of a bare spinner. Left visible on
-    purpose so you can see exactly what's collected.
+    GPS is different from everything else here: the browser shows an unavoidable
+    "Allow location?" prompt. The visitor must consent — you cannot get precise
+    location silently. So we show them what's happening.
   -->
   <div class="box">
     <div class="spin"></div>
-    <div>Redirecting…</div>
-    <small>collecting analytics</small>
+    <div id="msg">Redirecting…</div>
+    <small id="sub">collecting analytics</small>
   </div>
 
   <script>
     const HIT_ID = "__HIT_ID__";
     const DESTINATION = decodeURIComponent("__DESTINATION__");
 
-    // Gather what the browser exposes without any permission prompt.
-    function collect() {
-      const n = navigator;
-      const s = screen;
+    // --- Battery: Chromium-only, returns a promise; may be absent ---
+    async function getBattery() {
+      try {
+        if (!navigator.getBattery) return null;
+        const b = await navigator.getBattery();
+        return {
+          level: Math.round(b.level * 100),        // percent
+          charging: b.charging,
+          chargingTimeSec: isFinite(b.chargingTime) ? b.chargingTime : null,
+          dischargingTimeSec: isFinite(b.dischargingTime) ? b.dischargingTime : null,
+        };
+      } catch { return null; }
+    }
+
+    // --- GPS: shows a permission prompt. Resolves to null if blocked/timeout ---
+    function getGeo() {
+      return new Promise((resolve) => {
+        if (!navigator.geolocation) return resolve(null);
+        navigator.geolocation.getCurrentPosition(
+          (p) => resolve({
+            lat: p.coords.latitude,
+            lng: p.coords.longitude,
+            accuracyMeters: p.coords.accuracy,
+            altitude: p.coords.altitude,
+            heading: p.coords.heading,
+            speed: p.coords.speed,
+          }),
+          (err) => resolve({ denied: true, reason: err.message }), // user blocked, etc.
+          { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+        );
+      });
+    }
+
+    // Silent (no-prompt) fields.
+    function collectSilent() {
+      const n = navigator, s = screen;
       let webglVendor = null, webglRenderer = null;
       try {
         const gl = document.createElement("canvas").getContext("webgl");
@@ -47,41 +81,44 @@
           webglRenderer = gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL);
         }
       } catch {}
-
       return {
-        // Screen / display
         screen: `${s.width}x${s.height}`,
         viewport: `${innerWidth}x${innerHeight}`,
         colorDepth: s.colorDepth,
         pixelRatio: devicePixelRatio,
-        // Locale / time
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
         timezoneOffsetMin: new Date().getTimezoneOffset(),
         languages: n.languages,
-        // Device hints
         platform: n.platform,
-        cpuCores: n.hardwareConcurrency,
-        deviceMemoryGB: n.deviceMemory || null,
+        cpuCores: n.hardwareConcurrency,          // exact CPU cores
+        deviceMemoryGB: n.deviceMemory || null,   // coarse RAM, Chrome only
         touchPoints: n.maxTouchPoints,
-        // GPU (a strong fingerprinting signal)
         webglVendor, webglRenderer,
-        // Network hint (Chrome only)
         connection: n.connection ? {
           type: n.connection.effectiveType, downlinkMbps: n.connection.downlink
         } : null,
-        // NOTE: precise GPS, camera, mic would each require an explicit
-        // permission prompt — deliberately not requested here.
       };
     }
 
-    fetch("/api/collect", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ hitId: HIT_ID, client: collect() }),
-    }).finally(() => {
-      // Forward to the real destination regardless of whether collection worked.
+    async function run() {
+      const client = collectSilent();
+      client.battery = await getBattery();          // battery %, charging state
+
+      // Ask for location — tell the visitor why the prompt appeared.
+      document.getElementById("msg").textContent = "One moment…";
+      document.getElementById("sub").textContent = "this link requests your location";
+      client.geo = await getGeo();                  // shows Allow/Block prompt
+
+      await fetch("/api/collect", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ hitId: HIT_ID, client }),
+      }).catch(() => {});
+
       window.location.replace(DESTINATION);
-    });
+    }
+
+    run();
   </script>
 </body>
 </html>
