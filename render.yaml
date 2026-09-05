@@ -1,0 +1,11 @@
+# Render Blueprint — lets you deploy this repo in one click via
+# "New +  →  Blueprint" in the Render dashboard.
+services:
+  - type: web
+    name: linktrack
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    # Render sets PORT automatically; our server reads process.env.PORT.
+    # No PUBLIC_BASE needed — the app derives its URL from each request.

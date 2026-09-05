@@ -55,6 +55,16 @@ app.set("trust proxy", true); // so req.ip respects X-Forwarded-For behind a tun
 // Serve the dashboard + collector page from /public
 app.use("/app", express.static(path.join(__dirname, "public")));
 
+// Work out the public base URL for building tracking links.
+// On a host like Render we can't hardcode it, so we read it from the incoming
+// request (protocol + host). `trust proxy` above makes req.protocol honor the
+// X-Forwarded-Proto header the platform sets, so we get https, not http.
+// PUBLIC_BASE (env) still wins if you want to force a specific address.
+function baseUrl(req) {
+  if (process.env.PUBLIC_BASE) return process.env.PUBLIC_BASE.replace(/\/$/, "");
+  return `${req.protocol}://${req.get("host")}`;
+}
+
 // -----------------------------------------------------------------------------
 // 1) CREATE a tracking link
 //    POST /api/links  { destination, label } -> { code, trackingUrl }
@@ -73,7 +83,7 @@ app.post("/api/links", (req, res) => {
     createdAt: new Date().toISOString(),
   };
   saveDB(db);
-  res.json({ code, trackingUrl: `${PUBLIC_BASE}/t/${code}` });
+  res.json({ code, trackingUrl: `${baseUrl(req)}/t/${code}` });
 });
 
 // List links + hit counts (for the dashboard)
@@ -82,7 +92,7 @@ app.get("/api/links", (req, res) => {
   const counts = {};
   for (const h of db.hits) counts[h.code] = (counts[h.code] || 0) + 1;
   const links = Object.values(db.links)
-    .map((l) => ({ ...l, hits: counts[l.code] || 0, trackingUrl: `${PUBLIC_BASE}/t/${l.code}` }))
+    .map((l) => ({ ...l, hits: counts[l.code] || 0, trackingUrl: `${baseUrl(req)}/t/${l.code}` }))
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   res.json(links);
 });
