@@ -9,11 +9,14 @@
     * { box-sizing:border-box; }
     body { font-family:system-ui,sans-serif; background:var(--bg); color:var(--fg); margin:0; padding:24px; }
     h1 { font-size:20px; margin:0 0 4px; } .sub { color:var(--mut); margin:0 0 20px; font-size:13px; }
-    .row { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:20px; }
-    input { flex:1; min-width:200px; background:var(--card); border:1px solid var(--line); color:var(--fg);
-            padding:10px 12px; border-radius:8px; font-size:14px; }
+    .row { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:14px; align-items:center; }
+    input[type=text],input:not([type]) { flex:1; min-width:200px; background:var(--card); border:1px solid var(--line);
+            color:var(--fg); padding:10px 12px; border-radius:8px; font-size:14px; }
     button { background:var(--accent); color:#0b0e14; border:0; padding:10px 16px; border-radius:8px;
              font-weight:600; cursor:pointer; font-size:14px; }
+    button.ghost { background:transparent; color:var(--fg); border:1px solid var(--line); }
+    .controls { display:flex; gap:12px; align-items:center; margin-bottom:16px; font-size:13px; color:var(--mut); }
+    .controls label { display:flex; gap:6px; align-items:center; cursor:pointer; }
     .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px 16px; margin-bottom:12px; }
     .link-head { display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap; }
     .url { font-family:ui-monospace,monospace; color:var(--accent); word-break:break-all; font-size:13px; }
@@ -23,7 +26,10 @@
     th { color:var(--mut); font-weight:500; }
     .mut { color:var(--mut); } .empty { color:var(--mut); font-size:13px; padding:6px 0; }
     details summary { cursor:pointer; color:var(--accent); font-size:12px; }
-    pre { background:#0b0e14; padding:8px; border-radius:6px; overflow:auto; font-size:11px; margin:6px 0 0; }
+    pre { background:#0b0e14; padding:8px; border-radius:6px; overflow:auto; font-size:11px; margin:6px 0 0; max-width:520px; }
+    .dot { width:8px; height:8px; border-radius:50%; background:#3fb950; display:inline-block; }
+    .dot.off { background:#8a8f98; }
+    #status { font-size:12px; color:var(--mut); }
   </style>
 </head>
 <body>
@@ -31,14 +37,27 @@
   <p class="sub">Prototype click-analytics. Create a link, share the <code>/t/…</code> URL, watch hits appear.</p>
 
   <div class="row">
-    <input id="dest" placeholder="Destination URL (https://example.com)" />
-    <input id="label" placeholder="Label (optional)" style="flex:0 0 180px;min-width:140px" />
+    <input id="dest" type="text" placeholder="Destination URL (https://example.com)" />
+    <input id="label" type="text" placeholder="Label (optional)" style="flex:0 0 180px;min-width:140px" />
     <button onclick="createLink()">Create link</button>
+  </div>
+
+  <div class="controls">
+    <label><input type="checkbox" id="auto" checked /> <span class="dot" id="dot"></span> Auto-refresh</label>
+    <button class="ghost" onclick="refresh(true)">Refresh now</button>
+    <span id="status"></span>
   </div>
 
   <div id="links"></div>
 
   <script>
+    // --- state that survives refreshes ---
+    let lastSig = "";                 // signature of last-rendered data; skip render if unchanged
+    const openDetails = new Set();    // which hit-detail panels the user has expanded
+    let paused = false;               // true while a panel is open OR the user unchecks auto
+
+    function esc(s){ return (s==null?"":String(s)).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
+
     async function createLink() {
       const destination = document.getElementById("dest").value.trim();
       const label = document.getElementById("label").value.trim();
@@ -50,18 +69,21 @@
       if (d.error) return alert(d.error);
       document.getElementById("dest").value = "";
       document.getElementById("label").value = "";
-      load();
+      refresh(true);
     }
 
-    function esc(s){ return (s==null?"":String(s)).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
-
-    async function load() {
+    async function fetchData() {
       const links = await (await fetch("/api/links")).json();
+      for (const l of links) l._hits = await (await fetch(`/api/links/${l.code}/hits`)).json();
+      return links;
+    }
+
+    function render(links) {
       const box = document.getElementById("links");
       if (!links.length) { box.innerHTML = '<p class="empty">No links yet.</p>'; return; }
       box.innerHTML = "";
       for (const l of links) {
-        const hits = await (await fetch(`/api/links/${l.code}/hits`)).json();
+        const hits = l._hits;
         const div = document.createElement("div");
         div.className = "card";
         div.innerHTML = `
@@ -82,16 +104,55 @@
                 <td>${esc(h.browser)}<br><span class="mut">${esc(h.os)}</span></td>
                 <td>${esc(h.deviceType)}${h.deviceVendor?` · ${esc(h.deviceVendor)}`:""}</td>
                 <td>${esc((h.language||"").split(",")[0])}</td>
-                <td>${h.client ? `<details><summary>view</summary><pre>${esc(JSON.stringify(h.client,null,2))}</pre></details>` : '<span class="mut">—</span>'}</td>
+                <td>${h.client ? `<details data-hit="${esc(h.id)}"${openDetails.has(h.id)?" open":""}><summary>view</summary><pre>${esc(JSON.stringify(h.client,null,2))}</pre></details>` : '<span class="mut">—</span>'}</td>
               </tr>`).join("")}
           </table>` : '<div class="empty">No clicks yet.</div>'}
         `;
         box.appendChild(div);
       }
+      // Wire up detail toggles so we remember what's open and pause refresh while reading.
+      box.querySelectorAll("details[data-hit]").forEach(d => {
+        d.addEventListener("toggle", () => {
+          const id = d.getAttribute("data-hit");
+          if (d.open) openDetails.add(id); else openDetails.delete(id);
+          updatePauseState();
+        });
+      });
     }
 
-    load();
-    setInterval(load, 4000); // auto-refresh
+    function anyOpen() { return openDetails.size > 0; }
+
+    function updatePauseState() {
+      // Pause auto-refresh whenever a panel is open (so it can't collapse under you)
+      // or when the user unchecks Auto-refresh.
+      const autoOn = document.getElementById("auto").checked;
+      paused = !autoOn || anyOpen();
+      const dot = document.getElementById("dot");
+      const status = document.getElementById("status");
+      dot.className = "dot" + (paused ? " off" : "");
+      status.textContent = paused
+        ? (anyOpen() ? "paused — a panel is open" : "paused")
+        : "live";
+    }
+
+    async function refresh(force) {
+      // Skip auto-refresh while paused, unless the user forced it via the button.
+      if (!force && paused) return;
+      const links = await fetchData();
+      const sig = JSON.stringify(links.map(l => [l.code, l.hits, l._hits.map(h=>h.id)]));
+      if (!force && sig === lastSig) return;   // nothing changed → don't touch the DOM
+      lastSig = sig;
+      render(links);
+      updatePauseState();
+    }
+
+    document.getElementById("auto").addEventListener("change", () => {
+      updatePauseState();
+      if (document.getElementById("auto").checked) refresh(true);
+    });
+
+    refresh(true);
+    setInterval(() => refresh(false), 5000);
   </script>
 </body>
 </html>
