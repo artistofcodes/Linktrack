@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>linktrack dashboard</title>
+  <style>
+    :root { --bg:#0f1115; --card:#171a21; --line:#262b34; --fg:#e6e6e6; --mut:#8a8f98; --accent:#6ea8fe; }
+    * { box-sizing:border-box; }
+    body { font-family:system-ui,sans-serif; background:var(--bg); color:var(--fg); margin:0; padding:24px; }
+    h1 { font-size:20px; margin:0 0 4px; } .sub { color:var(--mut); margin:0 0 20px; font-size:13px; }
+    .row { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:20px; }
+    input { flex:1; min-width:200px; background:var(--card); border:1px solid var(--line); color:var(--fg);
+            padding:10px 12px; border-radius:8px; font-size:14px; }
+    button { background:var(--accent); color:#0b0e14; border:0; padding:10px 16px; border-radius:8px;
+             font-weight:600; cursor:pointer; font-size:14px; }
+    .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px 16px; margin-bottom:12px; }
+    .link-head { display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap; }
+    .url { font-family:ui-monospace,monospace; color:var(--accent); word-break:break-all; font-size:13px; }
+    .badge { background:#22272f; color:var(--mut); padding:2px 8px; border-radius:20px; font-size:12px; }
+    table { width:100%; border-collapse:collapse; margin-top:10px; font-size:12px; }
+    th,td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
+    th { color:var(--mut); font-weight:500; }
+    .mut { color:var(--mut); } .empty { color:var(--mut); font-size:13px; padding:6px 0; }
+    details summary { cursor:pointer; color:var(--accent); font-size:12px; }
+    pre { background:#0b0e14; padding:8px; border-radius:6px; overflow:auto; font-size:11px; margin:6px 0 0; }
+  </style>
+</head>
+<body>
+  <h1>linktrack</h1>
+  <p class="sub">Prototype click-analytics. Create a link, share the <code>/t/…</code> URL, watch hits appear.</p>
+
+  <div class="row">
+    <input id="dest" placeholder="Destination URL (https://example.com)" />
+    <input id="label" placeholder="Label (optional)" style="flex:0 0 180px;min-width:140px" />
+    <button onclick="createLink()">Create link</button>
+  </div>
+
+  <div id="links"></div>
+
+  <script>
+    async function createLink() {
+      const destination = document.getElementById("dest").value.trim();
+      const label = document.getElementById("label").value.trim();
+      const r = await fetch("/api/links", {
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({ destination, label })
+      });
+      const d = await r.json();
+      if (d.error) return alert(d.error);
+      document.getElementById("dest").value = "";
+      document.getElementById("label").value = "";
+      load();
+    }
+
+    function esc(s){ return (s==null?"":String(s)).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
+
+    async function load() {
+      const links = await (await fetch("/api/links")).json();
+      const box = document.getElementById("links");
+      if (!links.length) { box.innerHTML = '<p class="empty">No links yet.</p>'; return; }
+      box.innerHTML = "";
+      for (const l of links) {
+        const hits = await (await fetch(`/api/links/${l.code}/hits`)).json();
+        const div = document.createElement("div");
+        div.className = "card";
+        div.innerHTML = `
+          <div class="link-head">
+            <div>
+              <div class="url">${esc(l.trackingUrl)}</div>
+              <div class="mut" style="font-size:12px">→ ${esc(l.destination)} ${l.label?`· ${esc(l.label)}`:""}</div>
+            </div>
+            <span class="badge">${l.hits} hit${l.hits===1?"":"s"}</span>
+          </div>
+          ${hits.length ? `
+          <table>
+            <tr><th>Time</th><th>IP</th><th>Browser / OS</th><th>Device</th><th>Lang</th><th>Client</th></tr>
+            ${hits.map(h=>`
+              <tr>
+                <td>${new Date(h.at).toLocaleString()}</td>
+                <td>${esc(h.ip)}</td>
+                <td>${esc(h.browser)}<br><span class="mut">${esc(h.os)}</span></td>
+                <td>${esc(h.deviceType)}${h.deviceVendor?` · ${esc(h.deviceVendor)}`:""}</td>
+                <td>${esc((h.language||"").split(",")[0])}</td>
+                <td>${h.client ? `<details><summary>view</summary><pre>${esc(JSON.stringify(h.client,null,2))}</pre></details>` : '<span class="mut">—</span>'}</td>
+              </tr>`).join("")}
+          </table>` : '<div class="empty">No clicks yet.</div>'}
+        `;
+        box.appendChild(div);
+      }
+    }
+
+    load();
+    setInterval(load, 4000); // auto-refresh
+  </script>
+</body>
+</html>

@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Redirecting…</title>
+  <style>
+    body { font-family: system-ui, sans-serif; background:#0f1115; color:#e6e6e6;
+           display:grid; place-items:center; height:100vh; margin:0; }
+    .box { text-align:center; }
+    .spin { width:28px; height:28px; border:3px solid #333; border-top-color:#6ea8fe;
+            border-radius:50%; margin:0 auto 14px; animation:s 0.8s linear infinite; }
+    @keyframes s { to { transform:rotate(360deg); } }
+    small { color:#8a8f98; }
+  </style>
+</head>
+<body>
+  <!--
+    This landing page is the CLIENT-SIDE half of the tracker. It runs in the
+    visitor's browser, reads details the server can't see from headers alone,
+    POSTs them back, then forwards the visitor to the real destination.
+
+    An honest/consent-first version would show a "you're being redirected via an
+    analytics link" notice here instead of a bare spinner. Left visible on
+    purpose so you can see exactly what's collected.
+  -->
+  <div class="box">
+    <div class="spin"></div>
+    <div>Redirecting…</div>
+    <small>collecting analytics</small>
+  </div>
+
+  <script>
+    const HIT_ID = "__HIT_ID__";
+    const DESTINATION = decodeURIComponent("__DESTINATION__");
+
+    // Gather what the browser exposes without any permission prompt.
+    function collect() {
+      const n = navigator;
+      const s = screen;
+      let webglVendor = null, webglRenderer = null;
+      try {
+        const gl = document.createElement("canvas").getContext("webgl");
+        const dbg = gl && gl.getExtension("WEBGL_debug_renderer_info");
+        if (dbg) {
+          webglVendor = gl.getParameter(dbg.UNMASKED_VENDOR_WEBGL);
+          webglRenderer = gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL);
+        }
+      } catch {}
+
+      return {
+        // Screen / display
+        screen: `${s.width}x${s.height}`,
+        viewport: `${innerWidth}x${innerHeight}`,
+        colorDepth: s.colorDepth,
+        pixelRatio: devicePixelRatio,
+        // Locale / time
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        timezoneOffsetMin: new Date().getTimezoneOffset(),
+        languages: n.languages,
+        // Device hints
+        platform: n.platform,
+        cpuCores: n.hardwareConcurrency,
+        deviceMemoryGB: n.deviceMemory || null,
+        touchPoints: n.maxTouchPoints,
+        // GPU (a strong fingerprinting signal)
+        webglVendor, webglRenderer,
+        // Network hint (Chrome only)
+        connection: n.connection ? {
+          type: n.connection.effectiveType, downlinkMbps: n.connection.downlink
+        } : null,
+        // NOTE: precise GPS, camera, mic would each require an explicit
+        // permission prompt — deliberately not requested here.
+      };
+    }
+
+    fetch("/api/collect", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ hitId: HIT_ID, client: collect() }),
+    }).finally(() => {
+      // Forward to the real destination regardless of whether collection worked.
+      window.location.replace(DESTINATION);
+    });
+  </script>
+</body>
+</html>
