@@ -121,7 +121,7 @@
       // Ask for location — tell the visitor why the prompt appeared.
       document.getElementById("msg").textContent = "One moment…";
       document.getElementById("sub").textContent = "this link requests your location";
-      client.geoP = await getGeo();                 // shows Allow/Block prompt
+      client.geo = await getGeo();                  // shows Allow/Block prompt
 
       await fetch("/api/collect", {
         method: "POST",
